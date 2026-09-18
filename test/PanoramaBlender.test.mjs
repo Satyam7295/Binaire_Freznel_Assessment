@@ -25,9 +25,26 @@ class FakeMat {
   delete() {}
 }
 
+class FakeMatVector {
+  constructor() {
+    this.mats = [];
+  }
+
+  push_back(mat) {
+    this.mats.push(mat);
+  }
+
+  size() {
+    return this.mats.length;
+  }
+
+  delete() {}
+}
+
 function createFakeCv() {
   return {
     Mat: FakeMat,
+    MatVector: FakeMatVector,
     CV_32FC1: 5,
     CV_32FC4: 6,
     CV_64F: 7,

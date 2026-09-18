@@ -8,6 +8,7 @@ import HomographyEstimator from '../services/HomographyEstimator.js';
 import ImageWarper from '../services/ImageWarper.js';
 import PanoramaComposer from '../services/PanoramaComposer.js';
 import PanoramaBlender from '../services/PanoramaBlender.js';
+import PanoraDiagnostic from '../services/PanoraDiagnostic.js';
 import openCVManager, { OPEN_CV_STATES } from '../services/OpenCVManager.js';
 import ImageCard from './ImageCard.jsx';
 
@@ -380,6 +381,7 @@ function ImageInputPanel() {
     const estimator = new HomographyEstimator(cv);
     const composer = new PanoramaComposer(cv);
     const blender = new PanoramaBlender(cv);
+    const diagnostic = new PanoraDiagnostic(images);
 
     try {
       setIsBlendingPanorama(true);
@@ -390,13 +392,18 @@ function ImageInputPanel() {
         const pairLabel = `${images[index].name} to ${images[index + 1].name}`;
         const sourceFeatures = await getFeatureResult(images[index], detector);
         const targetFeatures = await getFeatureResult(images[index + 1], detector);
-        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel);
-        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult, pairLabel);
+        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel, diagnostic);
+        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult, pairLabel, diagnostic);
         homographies.push({ label: pairLabel, ...homographyResult });
       }
 
-      const composition = await composer.compose(images, homographies);
-      const result = composition.success ? await blender.blend(images, composition) : composition;
+      const composition = await composer.compose(images, homographies, diagnostic);
+      const result = composition.success ? await blender.blend(images, composition, diagnostic) : composition;
+      diagnostic.log('RUN END', {
+        success: result.success,
+        compositionSuccess: composition.success,
+        blendingReason: result.success ? null : result.reason
+      });
       setBlendingResult({ composition, result });
       setBlendingStatus(result.success
         ? 'Panorama blending successful.'

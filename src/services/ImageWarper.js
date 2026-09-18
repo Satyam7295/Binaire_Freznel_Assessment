@@ -3,7 +3,7 @@ export class ImageWarper {
     this.cv = cv;
   }
 
-  async warp(imageModel, homographyResult) {
+  async warp(imageModel, homographyResult, diagnostic = null) {
     this._validateRuntime();
     this._validateHomographyResult(homographyResult);
 
@@ -39,6 +39,16 @@ export class ImageWarper {
         this.cv.BORDER_CONSTANT,
         borderValue
       );
+
+      diagnostic?.log('WARP', {
+        image: imageModel.name,
+        sourceDimensions: { width: sourceMat.cols, height: sourceMat.rows },
+        destinationDimensions: { width: targetWidth, height: targetHeight },
+        warpMatrix: homographyResult.homography,
+        outputDimensions: { width: warpedMat.cols, height: warpedMat.rows },
+        borderMode: 'BORDER_CONSTANT',
+        validPixels: this._countValidPixels(warpedMat)
+      });
 
       if (warpedMat.empty?.() || warpedMat.cols !== targetWidth || warpedMat.rows !== targetHeight) {
         throw new Error('OpenCV returned an empty warped image.');
@@ -138,6 +148,21 @@ export class ImageWarper {
         ]
       };
     });
+  }
+
+  _countValidPixels(mat) {
+    const data = mat?.data || mat?.data8U;
+    const channels = typeof mat?.channels === 'function' ? mat.channels() : 0;
+    if (!data || !channels) return null;
+    let validPixels = 0;
+    for (let index = 0; index < mat.rows * mat.cols; index += 1) {
+      const offset = index * channels;
+      const valid = channels === 4
+        ? data[offset + 3] !== 0
+        : Array.from({ length: channels }, (_, channel) => data[offset + channel]).some((value) => value !== 0);
+      if (valid) validPixels += 1;
+    }
+    return validPixels;
   }
 
   async _imageModelToMat(imageModel) {

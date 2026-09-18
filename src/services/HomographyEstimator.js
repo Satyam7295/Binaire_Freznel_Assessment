@@ -18,7 +18,7 @@ export class HomographyEstimator {
     return { ...this.config };
   }
 
-  estimate(sourceFeatures, targetFeatures, matchResult, label = 'unknown pair') {
+  estimate(sourceFeatures, targetFeatures, matchResult, label = 'unknown pair', diagnostic = null) {
     if (!this.cv || typeof this.cv.findHomography !== 'function') {
       return { success: false, reason: 'OPENCV_UNAVAILABLE' };
     }
@@ -108,6 +108,19 @@ export class HomographyEstimator {
         outlierCount: matches.length - inlierCount,
         inlierPercentage: (inlierCount / matches.length) * 100,
         transformedSourceCorners: this._transformCorners(homography, sourceFeatures.width, sourceFeatures.height)
+      });
+      diagnostic?.log('HOMOGRAPHY', {
+        pair: label,
+        direction: 'source -> target',
+        correspondenceCount: matches.length,
+        inlierCount,
+        outlierCount: matches.length - inlierCount,
+        inlierPercentage: (inlierCount / matches.length) * 100,
+        H: homography,
+        determinant,
+        hasNaN: homography.flat().some((value) => Number.isNaN(value)),
+        hasInfinity: homography.flat().some((value) => !Number.isFinite(value)),
+        transformedCorners: this._transformCorners(homography, sourceFeatures.width, sourceFeatures.height)
       });
       return {
         success: true,

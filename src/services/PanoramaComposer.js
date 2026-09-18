@@ -6,7 +6,7 @@ export class PanoramaComposer {
     this.maxCanvasPixels = options.maxCanvasPixels ?? DEFAULT_MAX_CANVAS_PIXELS;
   }
 
-  async compose(images, pairwiseHomographies) {
+  async compose(images, pairwiseHomographies, diagnostic = null) {
     try {
       this._validateRuntime();
 
@@ -32,6 +32,11 @@ export class PanoramaComposer {
             pair: homographyResult?.label ?? `${images[index]?.name} to ${images[index + 1]?.name}`,
             order: `G${index + 1} = G${index} * inverse(H${index}->${index + 1})`,
             imageTransform: globalTransforms[index + 1]
+          });
+          diagnostic?.log('GLOBAL TRANSFORM', {
+            image: `G${index + 1}`,
+            formula: `G${index + 1} = G${index} * inverse(H${index}->${index + 1})`,
+            matrix: globalTransforms[index + 1]
           });
         } catch (error) {
           failedPairs.push({
@@ -68,6 +73,14 @@ export class PanoramaComposer {
         offsetX,
         offsetY,
         canvas: { width: canvas.width, height: canvas.height }
+      });
+      diagnostic?.log('COMPOSER BOUNDS', {
+        globalTransforms,
+        globalTransformedCorners: this._calculateDiagnosticCorners(dimensions, globalTransforms),
+        bounds,
+        canvas: { width: canvas.width, height: canvas.height },
+        offsetX,
+        offsetY
       });
       const canvasTransforms = globalTransforms.map((transform) => (
         this._multiplyMatrices(translation, transform)
@@ -111,6 +124,19 @@ export class PanoramaComposer {
           warpedCanvas.height = canvas.height;
           this.cv.imshow(warpedCanvas, transformedMat);
           compositionContext.drawImage(warpedCanvas, 0, 0);
+          diagnostic?.log('COMPOSITION WARP', {
+            image: images[index].name,
+            sourceDimensions: { width: sourceMat.cols, height: sourceMat.rows },
+            destinationDimensions: { width: canvas.width, height: canvas.height },
+            warpMatrix: canvasTransforms[index],
+            outputDimensions: { width: transformedMat.cols, height: transformedMat.rows },
+            borderMode: 'BORDER_CONSTANT',
+            geometricBounds: this._boundsFromPoints(this._calculateDiagnosticCorners([{
+              width: dimensions[index].width,
+              height: dimensions[index].height
+            }], [canvasTransforms[index]])[0].corners),
+            ...this._matCoverageSummary(transformedMat, 'warped image')
+          });
           imageCount += 1;
         } finally {
           sourceMat.delete();
@@ -118,6 +144,14 @@ export class PanoramaComposer {
           transformedMat?.delete?.();
         }
       }
+
+      const compositionData = compositionContext.getImageData(0, 0, canvas.width, canvas.height);
+      const compositionPixels = this._pixelSummary(compositionData);
+      diagnostic?.log('COMPOSITION BEFORE BLENDING', {
+        canvas: { width: canvas.width, height: canvas.height },
+        ...compositionPixels,
+        debugImage: compositionCanvas.toDataURL('image/png')
+      });
 
       return {
         success: true,
@@ -231,6 +265,108 @@ export class PanoramaComposer {
       && Number.isFinite(transformedX) && Number.isFinite(transformedY)
       ? [transformedX, transformedY]
       : null;
+  }
+
+  _calculateDiagnosticCorners(dimensions, transforms) {
+    return dimensions.map(({ width, height }, index) => ({
+      image: index,
+      corners: [[0, 0], [width, 0], [width, height], [0, height]]
+        .map(([x, y]) => ({ input: [x, y], output: this._transformPoint(transforms[index], x, y) }))
+    }));
+  }
+
+  _boundsFromPoints(points) {
+    const coordinates = points
+      .map((point) => point.output)
+      .filter((point) => Array.isArray(point) && point.every((value) => Number.isFinite(value)));
+    if (coordinates.length === 0) return null;
+    return coordinates.reduce((bounds, [x, y]) => ({
+      minX: Math.min(bounds.minX, x),
+      minY: Math.min(bounds.minY, y),
+      maxX: Math.max(bounds.maxX, x),
+      maxY: Math.max(bounds.maxY, y)
+    }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  }
+
+  _countValidPixels(mat) {
+    const data = mat?.data || mat?.data8U;
+    const channels = typeof mat?.channels === 'function' ? mat.channels() : 0;
+    if (!data || !channels) return null;
+    let validPixels = 0;
+    for (let index = 0; index < mat.rows * mat.cols; index += 1) {
+      const offset = index * channels;
+      const valid = channels === 4
+        ? data[offset + 3] !== 0
+        : Array.from({ length: channels }, (_, channel) => data[offset + channel]).some((value) => value !== 0);
+      if (valid) validPixels += 1;
+    }
+    return validPixels;
+  }
+
+  _pixelSummary(imageData) {
+    const { data, width, height } = imageData;
+    let validPixels = 0;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        if (data[offset + 3] !== 0 && (data[offset] !== 0 || data[offset + 1] !== 0 || data[offset + 2] !== 0)) {
+          validPixels += 1;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+    return {
+      validPixels,
+      emptyPixels: width * height - validPixels,
+      invalidPercentage: ((width * height - validPixels) / (width * height)) * 100,
+      validBoundingBox: validPixels > 0 ? { minX, maxX, minY, maxY } : null
+    };
+  }
+
+  _matCoverageSummary(mat, label) {
+    const data = mat?.data || mat?.data8U;
+    const channels = typeof mat?.channels === 'function' ? mat.channels() : 0;
+    const width = mat?.cols ?? 0;
+    const height = mat?.rows ?? 0;
+    if (!data || !channels || width <= 0 || height <= 0) {
+      return { label, validPixels: null, invalidPixels: null, invalidPercentage: null, validBoundingBox: null };
+    }
+
+    let validPixels = 0;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * channels;
+        const valid = channels === 4
+          ? data[offset + 3] !== 0
+          : Array.from({ length: channels }, (_, channel) => data[offset + channel]).some((value) => value !== 0);
+        if (valid) {
+          validPixels += 1;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+    const pixelCount = width * height;
+    return {
+      label,
+      validPixels,
+      invalidPixels: pixelCount - validPixels,
+      invalidPercentage: ((pixelCount - validPixels) / pixelCount) * 100,
+      validBoundingBox: validPixels > 0 ? { minX, maxX, minY, maxY } : null
+    };
   }
 
   _getCanvasSize(bounds) {

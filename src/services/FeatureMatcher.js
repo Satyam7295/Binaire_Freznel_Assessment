@@ -15,7 +15,7 @@ export class FeatureMatcher {
     return { ...this.config };
   }
 
-  match(sourceFeatures, targetFeatures, label = 'unknown pair') {
+  match(sourceFeatures, targetFeatures, label = 'unknown pair', diagnostic = null) {
     this._validateRuntime();
     this._validateFeatureResult(sourceFeatures, 'source');
     this._validateFeatureResult(targetFeatures, 'target');
@@ -64,22 +64,66 @@ export class FeatureMatcher {
         }
       }
 
+      const spatialStatsBeforeDeduplication = this._spatialStats(matches, sourceFeatures, targetFeatures);
+      const uniqueMatches = this._deduplicateMatches(matches);
+      const spatialStatsAfterDeduplication = this._spatialStats(uniqueMatches, sourceFeatures, targetFeatures);
+      const duplicateQueryCount = matches.length - new Set(matches.map((match) => match.queryIdx)).size;
+      const duplicateTrainCount = matches.length - new Set(matches.map((match) => match.trainIdx)).size;
+
       console.log('[GEOMETRY] Feature matching result', {
         pair: label,
         totalKnnMatches: candidateCount,
         matchesAfterLoweRatio: matches.length,
+        matchesBeforeDeduplication: matches.length,
+        matchesAfterDeduplication: uniqueMatches.length,
+        duplicateQueryIdx: duplicateQueryCount,
+        duplicateTrainIdx: duplicateTrainCount,
+        duplicateTrainIdxRemoved: duplicateTrainCount,
+        spatialSpreadBeforeDeduplication: spatialStatsBeforeDeduplication,
+        spatialSpreadAfterDeduplication: spatialStatsAfterDeduplication,
         ratioThreshold: this.config.ratioThreshold
       });
+      diagnostic?.log('FEATURE MATCHING', {
+        pair: { imageA: label.split(' to ')[0], imageB: label.split(' to ').slice(1).join(' to ') },
+        knnCandidates: candidateCount,
+        loweApproved: matches.length,
+        duplicateQueryIdx: duplicateQueryCount,
+        duplicateTrainIdx: duplicateTrainCount,
+        finalMatches: uniqueMatches.length,
+        source: spatialStatsAfterDeduplication.source,
+        target: spatialStatsAfterDeduplication.target,
+        sample: uniqueMatches.slice(0, 10).map((match) => ({
+          queryIdx: match.queryIdx,
+          trainIdx: match.trainIdx,
+          source: this._getKeypointCoordinates(sourceFeatures, match.queryIdx),
+          target: this._getKeypointCoordinates(targetFeatures, match.trainIdx),
+          distance: match.distance
+        }))
+      });
+
+      this._validateMatchGeometry(uniqueMatches, spatialStatsAfterDeduplication);
 
       return {
-        matches,
-        matchCount: matches.length,
+        matches: uniqueMatches,
+        matchCount: uniqueMatches.length,
         sourceKeypointCount: sourceFeatures.keypointCount,
         targetKeypointCount: targetFeatures.keypointCount,
-        ratioThreshold: this.config.ratioThreshold
+        ratioThreshold: this.config.ratioThreshold,
+        diagnostics: {
+          candidateCount,
+          matchesBeforeDeduplication: matches.length,
+          matchesAfterDeduplication: uniqueMatches.length,
+          duplicateQueryCount,
+          duplicateTrainCount,
+          spatialStatsBeforeDeduplication,
+          spatialStatsAfterDeduplication
+        }
       };
     } catch (error) {
       console.warn('Feature matching failed:', error);
+      if (error?.code === 'INSUFFICIENT_SPATIAL_MATCHES') {
+        throw error;
+      }
       throw new Error('Feature matching failed.');
     } finally {
       if (knnMatches && typeof knnMatches.delete === 'function') {
@@ -130,6 +174,124 @@ export class FeatureMatcher {
     } catch (error) {
       console.warn('Feature matcher initialization failed:', error);
       throw new Error('Unable to initialize the feature matcher.');
+    }
+  }
+
+  _deduplicateMatches(matches) {
+    const sortedMatches = [...matches].sort((left, right) => (
+      left.distance - right.distance
+      || left.queryIdx - right.queryIdx
+      || left.trainIdx - right.trainIdx
+    ));
+    const queryIndexes = new Set();
+    const trainIndexes = new Set();
+
+    return sortedMatches.filter((match) => {
+      if (queryIndexes.has(match.queryIdx) || trainIndexes.has(match.trainIdx)) {
+        return false;
+      }
+
+      queryIndexes.add(match.queryIdx);
+      trainIndexes.add(match.trainIdx);
+      return true;
+    });
+  }
+
+  _spatialStats(matches, sourceFeatures, targetFeatures) {
+    const sourcePoints = [];
+    const targetPoints = [];
+
+    for (const match of matches) {
+      const sourcePoint = this._getKeypointCoordinates(sourceFeatures, match.queryIdx);
+      const targetPoint = this._getKeypointCoordinates(targetFeatures, match.trainIdx);
+
+      if (sourcePoint && targetPoint) {
+        sourcePoints.push(sourcePoint);
+        targetPoints.push(targetPoint);
+      }
+    }
+
+    return {
+      source: this._pointSpread(sourcePoints, sourceFeatures.width, sourceFeatures.height),
+      target: this._pointSpread(targetPoints, targetFeatures.width, targetFeatures.height)
+    };
+  }
+
+  _pointSpread(points, width, height) {
+    if (points.length === 0) {
+      return {
+        minX: null,
+        maxX: null,
+        minY: null,
+        maxY: null,
+        spreadX: 0,
+        spreadY: 0,
+        spreadPercentX: 0,
+        spreadPercentY: 0,
+        coverage: 0
+      };
+    }
+
+    const xValues = points.map((point) => point.x);
+    const yValues = points.map((point) => point.y);
+    const minX = Math.min(...xValues);
+    const maxX = Math.max(...xValues);
+    const minY = Math.min(...yValues);
+    const maxY = Math.max(...yValues);
+    const spreadX = maxX - minX;
+    const spreadY = maxY - minY;
+    const imageWidth = Number(width) > 0 ? Number(width) : 0;
+    const imageHeight = Number(height) > 0 ? Number(height) : 0;
+    const imageArea = imageWidth * imageHeight;
+
+    return {
+      minX,
+      maxX,
+      minY,
+      maxY,
+      spreadX,
+      spreadY,
+      spreadPercentX: imageWidth > 0 ? spreadX / imageWidth : 0,
+      spreadPercentY: imageHeight > 0 ? spreadY / imageHeight : 0,
+      coverage: imageArea > 0 ? (spreadX * spreadY) / imageArea : 0
+    };
+  }
+
+  _validateMatchGeometry(matches, spatialStats) {
+    if (matches.length < 4) {
+      throw this._createDegeneracyError('At least four unique feature correspondences are required.');
+    }
+
+    const isConcentrated = [spatialStats.source, spatialStats.target].some((spread) => (
+      spread.spreadPercentX < 0.05
+      || spread.spreadPercentY < 0.05
+      || spread.coverage < 0.01
+    ));
+
+    if (isConcentrated) {
+      throw this._createDegeneracyError('Insufficient spatially distributed feature matches.');
+    }
+  }
+
+  _createDegeneracyError(message) {
+    const error = new Error(message);
+    error.code = 'INSUFFICIENT_SPATIAL_MATCHES';
+    return error;
+  }
+
+  _getKeypointCoordinates(features, index) {
+    if (!features?.keypoints || !Number.isInteger(index) || index < 0) {
+      return null;
+    }
+
+    try {
+      const keypoint = features.keypoints.get?.(index);
+      const point = keypoint?.pt ?? keypoint;
+      const x = Number(point?.x);
+      const y = Number(point?.y);
+      return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+    } catch {
+      return null;
     }
   }
 
