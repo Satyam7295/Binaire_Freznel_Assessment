@@ -1,3 +1,4 @@
+import React from 'react';
 import { Button, Content, Flex, Heading, Image, Text, View } from '@adobe/react-spectrum';
 
 function formatFileSize(size) {

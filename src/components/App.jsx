@@ -1,3 +1,4 @@
+import React from 'react';
 import { Flex, Heading, StatusLight, Text, View } from '@adobe/react-spectrum';
 import { useEffect, useMemo, useState } from 'react';
 import openCVManager, { OPEN_CV_STATES } from '../services/OpenCVManager.js';
@@ -17,13 +18,27 @@ const OPEN_CV_VARIANTS = {
   [OPEN_CV_STATES.FAILED]: 'negative'
 };
 
+console.log('[DIAG] App.jsx executed');
+
 function App() {
   const appName = window.electronAPI?.appName ?? 'Panora';
   const [opencvState, setOpenCVState] = useState(openCVManager.getState());
 
   useEffect(() => {
-    const unsubscribe = openCVManager.subscribe(setOpenCVState);
-    openCVManager.initialize().catch(() => {
+    console.log('[DIAG] App mounted');
+    setTimeout(() => console.log('[DIAG] renderer responsive'), 0);
+    const unsubscribe = openCVManager.subscribe((state) => {
+      console.log(`[DIAG] App received OpenCV state: ${state}`);
+      console.log(`[DIAG] App calling setOpenCVState: ${state}`);
+      setOpenCVState(state);
+    });
+    console.log('[DIAG] App subscribed to OpenCV manager');
+    openCVManager.initialize().then(() => {
+      const state = openCVManager.getState();
+      console.log(`[DIAG] App initialization resolved with state: ${state}`);
+      console.log(`[DIAG] App calling setOpenCVState: ${state}`);
+      setOpenCVState(state);
+    }).catch(() => {
       // The app remains usable without OpenCV; errors are surfaced in the UI.
     });
 
@@ -34,6 +49,12 @@ function App() {
     label: OPEN_CV_LABELS[opencvState] ?? 'Initializing...',
     variant: OPEN_CV_VARIANTS[opencvState] ?? 'notice'
   }), [opencvState]);
+
+  useEffect(() => {
+    console.log('[DIAG] App opencvState rendered:', opencvState);
+  }, [opencvState]);
+
+  console.log('[DIAG] OpenCV UI label:', openCVStatus.label);
 
   return (
     <main className="app-shell">

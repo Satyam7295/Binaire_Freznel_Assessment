@@ -28,6 +28,11 @@ export class PanoramaComposer {
           const pairHomography = this._readHomography(homographyResult);
           const inversePairHomography = this._invertMatrix(pairHomography);
           globalTransforms.push(this._multiplyMatrices(globalTransforms[index], inversePairHomography));
+          console.log('[GEOMETRY] Transform accumulation', {
+            pair: homographyResult?.label ?? `${images[index]?.name} to ${images[index + 1]?.name}`,
+            order: `G${index + 1} = G${index} * inverse(H${index}->${index + 1})`,
+            imageTransform: globalTransforms[index + 1]
+          });
         } catch (error) {
           failedPairs.push({
             index,
@@ -57,6 +62,13 @@ export class PanoramaComposer {
         [0, 1, offsetY],
         [0, 0, 1]
       ];
+      console.log('[GEOMETRY] Panorama bounds and translation', {
+        globalTransforms,
+        bounds,
+        offsetX,
+        offsetY,
+        canvas: { width: canvas.width, height: canvas.height }
+      });
       const canvasTransforms = globalTransforms.map((transform) => (
         this._multiplyMatrices(translation, transform)
       ));
@@ -114,6 +126,11 @@ export class PanoramaComposer {
         offsetX,
         offsetY,
         imageCount,
+        placements: canvasTransforms.map((transform, index) => ({
+          transform,
+          width: dimensions[index].width,
+          height: dimensions[index].height
+        })),
         composedImage: compositionCanvas.toDataURL('image/png')
       };
     } catch (error) {
@@ -186,9 +203,12 @@ export class PanoramaComposer {
   }
 
   _calculateBounds(dimensions, transforms) {
-    const corners = dimensions.flatMap(({ width, height }, index) => [
-      [0, 0], [width, 0], [width, height], [0, height]
-    ].map(([x, y]) => this._transformPoint(transforms[index], x, y)));
+    const cornersByImage = dimensions.map(({ width, height }, index) => (
+      [[0, 0], [width, 0], [width, height], [0, height]]
+        .map(([x, y]) => this._transformPoint(transforms[index], x, y))
+    ));
+    console.log('[GEOMETRY] Global transformed corners', JSON.stringify(cornersByImage));
+    const corners = cornersByImage.flat();
 
     if (corners.some((point) => !point)) {
       throw new Error('The transformed image bounds are invalid.');

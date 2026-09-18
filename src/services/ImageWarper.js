@@ -20,6 +20,12 @@ export class ImageWarper {
       warpedMat = new this.cv.Mat();
       const targetWidth = homographyResult.targetWidth;
       const targetHeight = homographyResult.targetHeight;
+      console.log('[GEOMETRY] Image warp bounds', {
+        pair: imageModel.name,
+        sourceDimensions: { width: homographyResult.sourceWidth, height: homographyResult.sourceHeight },
+        targetDimensions: { width: targetWidth, height: targetHeight },
+        transformedSourceCorners: this._transformCorners(homographyResult.homography, homographyResult.sourceWidth, homographyResult.sourceHeight)
+      });
       const borderValue = typeof this.cv.Scalar === 'function'
         ? new this.cv.Scalar(0, 0, 0, 0)
         : [0, 0, 0, 0];
@@ -117,6 +123,21 @@ export class ImageWarper {
 
   _isValidDimension(value) {
     return Number.isInteger(value) && value > 0;
+  }
+
+  _transformCorners(matrix, width, height) {
+    const values = this._flattenHomography(matrix);
+    const corners = [[0, 0], [width, 0], [width, height], [0, height]];
+    return corners.map(([x, y]) => {
+      const denominator = values[6] * x + values[7] * y + values[8];
+      return {
+        input: [x, y],
+        output: [
+          (values[0] * x + values[1] * y + values[2]) / denominator,
+          (values[3] * x + values[4] * y + values[5]) / denominator
+        ]
+      };
+    });
   }
 
   async _imageModelToMat(imageModel) {

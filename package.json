@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env NODE_ENV=development electron .\"",
     "build": "vite build",
+    "test": "node --experimental-default-type=module --test test",
     "start": "npm run build && cross-env NODE_ENV=production electron ."
   },
   "dependencies": {

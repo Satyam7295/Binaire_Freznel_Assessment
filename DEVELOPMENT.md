@@ -31,7 +31,7 @@ The application also includes `OpenCVManager`, a lifecycle boundary for loading 
 
 The renderer now includes a dedicated `FeatureDetector` class that converts an `ImageModel` into a browser-safe OpenCV `Mat`, converts the image to grayscale for ORB, detects keypoints, and computes descriptors. A separate `FeatureMatcher` class compares two detector results with an OpenCV Hamming `BFMatcher`, KNN matching, and Lowe's ratio test. `HomographyEstimator` consumes those detector and matcher results, estimates a robust source-to-target geometric transform, and returns only serializable homography data and RANSAC statistics. `ImageWarper` now consumes an `ImageModel` and a successful homography result, applies `cv.warpPerspective`, and returns a lossless browser preview in target coordinates. Panorama composition, blending, stitching, projection, and export remain future responsibilities and are intentionally not part of this implementation.
 
-Future processing concepts include `ImageBlender`, `PanoramaStitcher`, projection strategies, and `PanoramaExporter`. `ImageWarper` is implemented as the current boundary; these remaining OpenCV-related concepts remain architectural intentions only.
+Future processing concepts include `PanoramaStitcher`, projection strategies, and `PanoramaExporter`. `ImageWarper`, `PanoramaComposer`, and `PanoramaBlender` are implemented as separate renderer-side boundaries; projection and export remain future responsibilities.
 
 ## Security Decisions
 
@@ -58,12 +58,18 @@ The initial file-selection workflow uses browser `File` and `URL` APIs in the Re
 1. Add the image-input workflow and supported file validation. (Implemented.)
 2. Add OpenCV.js loading and image-processing service boundaries. (Implemented: `OpenCVManager` and local runtime initialization.)
 3. Implement feature detection, matching, and homography estimation for panorama creation. (Implemented.)
-4. Implement image warping, composition, and blending for panorama creation. (Image warping and global composition implemented; blending not done.)
+4. Implement image warping, composition, and blending for panorama creation. (Implemented: image warping, global composition, and weighted feather blending.)
 5. Add cylindrical and spherical projection strategies. (Not done.)
 6. Add the panorama viewer with pan, zoom, and rotation controls. (Not done.)
 7. Add JPEG, PNG, and AVIF export. (Not done.)
 8. Expand the preload IPC API only where desktop capabilities are required. (Not done.)
-9. Add focused automated tests and production packaging configuration. (Not done.)
+9. Add focused automated tests and production packaging configuration. (Focused blender contract tests implemented; packaging configuration not done.)
+
+## Runtime Validation
+
+The production Vite renderer build completed successfully during the September 15, 2026 validation pass. The existing Vite server responded on `http://127.0.0.1:5173/`, and the Electron dependency required `npm rebuild electron` because its downloaded Windows executable was initially missing. The Electron process launched after that repair, but the available browser automation bridge timed out while attaching to the shared renderer pages, so the React UI, OpenCV WASM readiness state, image selection, and end-to-end panorama preview could not be independently observed in this environment. A subsequent `npm run dev` attempt found `5173` and `5174` already occupied, selected `5175` for Vite, and then exited because the Electron command continued waiting on `5173`; direct HTTP checks still returned the Panora HTML shell from `5173` and `5174`, but did not validate renderer execution.
+
+The focused `PanoramaBlender` tests run with Node's built-in test runner and cover canvas-size rejection, placement matrix validation, invalid placement values, and zero-weight normalization reaching a finite PNG output path. They do not replace a real browser/OpenCV pipeline test. No export functionality was added.
 
 ## Technical Decisions
 
@@ -165,10 +171,20 @@ The initial file-selection workflow uses browser `File` and `URL` APIs in the Re
 
 **Why composition precedes blending:** Blending requires all pixels to already occupy one shared canvas. Establishing global geometry and the complete canvas first gives a future blender stable overlap regions and avoids mixing coordinate accumulation with seam, exposure, or weighting decisions.
 
+### DEC-011: Dedicated PanoramaBlender with validity masks and feather weights
+
+**Decision:** Use `PanoramaBlender` after composition to warp each source image and an independent binary validity mask into the composer canvas. A distance transform creates a feather weight that rises from the image boundary toward the interior, capped by the configurable default radius of 50 pixels.
+
+**Accumulation:** Images are processed sequentially into a `CV_32FC4` weighted-color accumulator and a `CV_32FC1` total-weight accumulator. The final image divides the color accumulator by expanded weights and converts only after normalization to `CV_8U`. Empty canvas pixels remain zero through OpenCV's divide behavior and are never handled with JavaScript division.
+
+**Separation and memory:** The blender consumes only composition dimensions and already-computed canvas transforms; it does not estimate or alter placement. Source mats, masks, distance mats, weights, expanded weights, float images, weighted images, accumulators, and output mats are released in `finally` blocks. The browser data URL is the only returned image representation.
+
+**Why feathering first:** Feather blending is understandable, inexpensive, and useful for reducing hard overwrite seams without smoothing the entire panorama. Multiband blending would add substantially more memory, tuning, and failure modes before the core composition contract has been exercised. Exposure compensation, color correction, advanced seam optimization, and multiband blending remain future work.
+
 ## Known Limitations
 
-- The application validates and previews selected images and can compose selected adjacent pairs into one global canvas, but does not yet blend or otherwise finalize them.
-- OpenCV.js is available locally as a bundled runtime, and feature detection, adjacent-pair descriptor matching, RANSAC homography estimation, target-space image warping, and global canvas composition are implemented; blending and projection are not yet implemented.
+- The application validates and previews selected images, composes them into one global canvas, and provides a development-only weighted feather blend preview. It does not yet export or finalize panoramas.
+- OpenCV.js is available locally as a bundled runtime, and feature detection, adjacent-pair descriptor matching, RANSAC homography estimation, target-space image warping, global canvas composition, and weighted feather blending are implemented; projection is not yet implemented.
 - Image stitching, panorama generation, panorama projections, viewer controls, export formats, persistence, and packaging configuration do not exist yet.
 - The current preload bridge exposes only a static application name to verify the boundary.
 - OpenCV objects such as `cv.Mat` must be explicitly released with `.delete()` once image-processing work begins; this is a required memory-management discipline for future pipeline stages.

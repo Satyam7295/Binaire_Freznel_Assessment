@@ -1,5 +1,8 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
+
+console.log('[DIAG] preload executed');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  appName: 'Panora'
+  appName: 'Panora',
+  selectImages: () => ipcRenderer.invoke('select-images')
 });

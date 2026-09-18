@@ -1,3 +1,4 @@
+import React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Heading, Text, View, Well } from '@adobe/react-spectrum';
 import { createImageModels } from '../services/imageInputService.js';
@@ -6,8 +7,11 @@ import FeatureMatcher from '../services/FeatureMatcher.js';
 import HomographyEstimator from '../services/HomographyEstimator.js';
 import ImageWarper from '../services/ImageWarper.js';
 import PanoramaComposer from '../services/PanoramaComposer.js';
+import PanoramaBlender from '../services/PanoramaBlender.js';
 import openCVManager, { OPEN_CV_STATES } from '../services/OpenCVManager.js';
 import ImageCard from './ImageCard.jsx';
+
+console.log('[DIAG] ImageInputPanel module executed');
 
 function ImageInputPanel() {
   const [images, setImages] = useState([]);
@@ -28,13 +32,16 @@ function ImageInputPanel() {
   const [compositionStatus, setCompositionStatus] = useState('');
   const [compositionResult, setCompositionResult] = useState(null);
   const [isComposingPanorama, setIsComposingPanorama] = useState(false);
-  const fileInputRef = useRef(null);
+  const [blendingStatus, setBlendingStatus] = useState('');
+  const [blendingResult, setBlendingResult] = useState(null);
+  const [isBlendingPanorama, setIsBlendingPanorama] = useState(false);
   const imagesRef = useRef(images);
   const featureResultsRef = useRef(new Map());
 
   imagesRef.current = images;
 
   useEffect(() => {
+    console.log('[DIAG] Add Images component mounted');
     const unsubscribe = openCVManager.subscribe(setOpenCVState);
 
     return () => {
@@ -50,8 +57,37 @@ function ImageInputPanel() {
     result?.descriptors?.delete?.();
   }
 
-  function handleAddImages() {
-    fileInputRef.current?.click();
+  async function handleAddImages() {
+    console.log('[DIAG] ADD_IMAGES_CLICKED');
+
+    try {
+      const result = await window.electronAPI.selectImages();
+
+      if (result.canceled || result.files.length === 0) {
+        return;
+      }
+
+      const files = result.files.map(({ name, type, lastModified, data }) => {
+        const bytes = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+        return new File([bytes], name, { type, lastModified });
+      });
+
+      await handleFileSelection(files);
+    } catch (error) {
+      console.error('[Panora] Image selection failed:', error);
+    }
+  }
+
+  async function handleFileSelection(files) {
+    const selectedFiles = Array.from(files ?? []);
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    const result = await createImageModels(selectedFiles, imagesRef.current);
+    setImages((currentImages) => [...currentImages, ...result.images]);
+    setRejectedFiles(result.rejectedFiles);
   }
 
   async function handleDetectFeatures() {
@@ -89,6 +125,13 @@ function ImageInputPanel() {
       }
     } catch (error) {
       console.warn('Feature detection failed:', error);
+      console.error('[ROOT FAILURE]', {
+        stage: 'Feature Detection',
+        operation: 'FeatureDetector.detect',
+        type: error?.constructor?.name,
+        message: error?.message,
+        stack: error?.stack
+      });
       setFeatureStatus('Feature detection failed for this image.');
       setFeatureCount(null);
     } finally {
@@ -135,7 +178,8 @@ function ImageInputPanel() {
         const targetImage = images[index + 1];
         const sourceFeatures = await getFeatureResult(sourceImage, detector);
         const targetFeatures = await getFeatureResult(targetImage, detector);
-        const matchResult = matcher.match(sourceFeatures, targetFeatures);
+        const pairLabel = `${sourceImage.name} to ${targetImage.name}`;
+        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel);
 
         results.push({
           label: `${sourceImage.name} to ${targetImage.name}`,
@@ -147,6 +191,7 @@ function ImageInputPanel() {
       setMatchingStatus('Feature matching completed.');
     } catch (error) {
       console.warn('Feature matching failed:', error);
+      console.error('[DOWNSTREAM STOPPED]', { stage: 'Feature Matching', cause: error?.message, stack: error?.stack });
       setMatchingResults([]);
       setMatchingStatus('Feature matching failed for the selected images.');
     } finally {
@@ -182,8 +227,9 @@ function ImageInputPanel() {
         const targetImage = images[index + 1];
         const sourceFeatures = await getFeatureResult(sourceImage, detector);
         const targetFeatures = await getFeatureResult(targetImage, detector);
-        const matchResult = matcher.match(sourceFeatures, targetFeatures);
-        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult);
+        const pairLabel = `${sourceImage.name} to ${targetImage.name}`;
+        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel);
+        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult, pairLabel);
 
         results.push({
           label: `${sourceImage.name} to ${targetImage.name}`,
@@ -195,6 +241,7 @@ function ImageInputPanel() {
       setHomographyStatus('Homography estimation completed.');
     } catch (error) {
       console.warn('Homography estimation failed:', error);
+      console.error('[DOWNSTREAM STOPPED]', { stage: 'Homography Estimation', cause: error?.message, stack: error?.stack });
       setHomographyResults([]);
       setHomographyStatus('Homography estimation failed for the selected images.');
     } finally {
@@ -232,8 +279,9 @@ function ImageInputPanel() {
         const targetImage = images[index + 1];
         const sourceFeatures = await getFeatureResult(sourceImage, detector);
         const targetFeatures = await getFeatureResult(targetImage, detector);
-        const matchResult = matcher.match(sourceFeatures, targetFeatures);
-        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult);
+        const pairLabel = `${sourceImage.name} to ${targetImage.name}`;
+        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel);
+        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult, pairLabel);
         const warpResult = homographyResult.success
           ? await warper.warp(sourceImage, homographyResult)
           : { success: false };
@@ -249,6 +297,7 @@ function ImageInputPanel() {
       setWarpStatus('Image warping completed.');
     } catch (error) {
       console.warn('Image warping validation failed:', error);
+      console.error('[DOWNSTREAM STOPPED]', { stage: 'Image Warping', cause: error?.message, stack: error?.stack });
       setWarpResults([]);
       setWarpStatus('Image warping failed for the selected images.');
     } finally {
@@ -286,8 +335,9 @@ function ImageInputPanel() {
         const targetImage = images[index + 1];
         const sourceFeatures = await getFeatureResult(sourceImage, detector);
         const targetFeatures = await getFeatureResult(targetImage, detector);
-        const matchResult = matcher.match(sourceFeatures, targetFeatures);
-        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult);
+        const pairLabel = `${images[index].name} to ${images[index + 1].name}`;
+        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel);
+        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult, pairLabel);
 
         homographies.push({
           label: `${sourceImage.name} to ${targetImage.name}`,
@@ -303,6 +353,7 @@ function ImageInputPanel() {
         : `Panorama composition failed (${result.reason})${failedPairLabel ? ` for ${failedPairLabel}.` : '.'}`);
     } catch (error) {
       console.warn('Panorama composition validation failed:', error);
+      console.error('[DOWNSTREAM STOPPED]', { stage: 'Panorama Composition', cause: error?.message, stack: error?.stack });
       setCompositionResult(null);
       setCompositionStatus('Panorama composition failed for the selected images.');
     } finally {
@@ -310,17 +361,54 @@ function ImageInputPanel() {
     }
   }
 
-  async function handleFileSelection(event) {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = '';
-
-    if (files.length === 0) {
+  async function handleBlendPanorama() {
+    if (images.length < 2) {
+      setBlendingStatus('Select at least two images before blending a panorama.');
+      setBlendingResult(null);
       return;
     }
 
-    const result = await createImageModels(files, imagesRef.current);
-    setImages((currentImages) => [...currentImages, ...result.images]);
-    setRejectedFiles(result.rejectedFiles);
+    if (opencvState !== OPEN_CV_STATES.READY || !openCVManager.getCV()) {
+      setBlendingStatus('OpenCV is not ready yet.');
+      setBlendingResult(null);
+      return;
+    }
+
+    const cv = openCVManager.getCV();
+    const detector = new FeatureDetector(cv);
+    const matcher = new FeatureMatcher(cv);
+    const estimator = new HomographyEstimator(cv);
+    const composer = new PanoramaComposer(cv);
+    const blender = new PanoramaBlender(cv);
+
+    try {
+      setIsBlendingPanorama(true);
+      setBlendingStatus('Composing and blending panorama...');
+      setBlendingResult(null);
+      const homographies = [];
+      for (let index = 0; index < images.length - 1; index += 1) {
+        const pairLabel = `${images[index].name} to ${images[index + 1].name}`;
+        const sourceFeatures = await getFeatureResult(images[index], detector);
+        const targetFeatures = await getFeatureResult(images[index + 1], detector);
+        const matchResult = matcher.match(sourceFeatures, targetFeatures, pairLabel);
+        const homographyResult = estimator.estimate(sourceFeatures, targetFeatures, matchResult, pairLabel);
+        homographies.push({ label: pairLabel, ...homographyResult });
+      }
+
+      const composition = await composer.compose(images, homographies);
+      const result = composition.success ? await blender.blend(images, composition) : composition;
+      setBlendingResult({ composition, result });
+      setBlendingStatus(result.success
+        ? 'Panorama blending successful.'
+        : `Panorama blending failed (${result.reason}).`);
+    } catch (error) {
+      console.warn('Panorama blending validation failed:', error);
+      console.error('[DOWNSTREAM STOPPED]', { stage: 'Panorama Blending', cause: error?.message, stack: error?.stack });
+      setBlendingResult(null);
+      setBlendingStatus('Panorama blending failed for the selected images.');
+    } finally {
+      setIsBlendingPanorama(false);
+    }
   }
 
   function handleRemoveImage(imageId) {
@@ -341,14 +429,6 @@ function ImageInputPanel() {
           <Button variant="accent" onPress={handleAddImages}>
             Add Images
           </Button>
-          <input
-            ref={fileInputRef}
-            className="visually-hidden"
-            type="file"
-            accept=".jpg,.jpeg,.png,.avif,image/jpeg,image/png,image/avif"
-            multiple
-            onChange={handleFileSelection}
-          />
         </div>
 
         {rejectedFiles.length > 0 && (
@@ -366,37 +446,44 @@ function ImageInputPanel() {
               <Button
                 variant="secondary"
                 onPress={handleDetectFeatures}
-                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || opencvState !== OPEN_CV_STATES.READY}
+                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || isBlendingPanorama || opencvState !== OPEN_CV_STATES.READY}
               >
                 {isDetectingFeatures ? 'Detecting...' : 'Detect Features'}
               </Button>
               <Button
                 variant="secondary"
                 onPress={handleMatchFeatures}
-                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || opencvState !== OPEN_CV_STATES.READY}
+                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || isBlendingPanorama || opencvState !== OPEN_CV_STATES.READY}
               >
                 {isMatchingFeatures ? 'Matching...' : 'Match Features'}
               </Button>
               <Button
                 variant="secondary"
                 onPress={handleEstimateHomography}
-                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || opencvState !== OPEN_CV_STATES.READY}
+                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || isBlendingPanorama || opencvState !== OPEN_CV_STATES.READY}
               >
                 {isEstimatingHomography ? 'Estimating...' : 'Estimate Homography'}
               </Button>
               <Button
                 variant="secondary"
                 onPress={handleWarpImages}
-                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || opencvState !== OPEN_CV_STATES.READY}
+                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || isBlendingPanorama || opencvState !== OPEN_CV_STATES.READY}
               >
                 {isWarpingImages ? 'Warping...' : 'Warp Image'}
               </Button>
               <Button
                 variant="accent"
                 onPress={handleComposePanorama}
-                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || opencvState !== OPEN_CV_STATES.READY}
+                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || isBlendingPanorama || opencvState !== OPEN_CV_STATES.READY}
               >
                 {isComposingPanorama ? 'Composing...' : 'Compose Panorama'}
+              </Button>
+              <Button
+                variant="accent"
+                onPress={handleBlendPanorama}
+                isDisabled={isDetectingFeatures || isMatchingFeatures || isEstimatingHomography || isWarpingImages || isComposingPanorama || isBlendingPanorama || opencvState !== OPEN_CV_STATES.READY}
+              >
+                {isBlendingPanorama ? 'Blending...' : 'Blend Panorama'}
               </Button>
             </div>
             {featureStatus && (
@@ -440,6 +527,15 @@ function ImageInputPanel() {
                   Images: {compositionResult.imageCount} | Canvas: {compositionResult.width} x {compositionResult.height} | Offset: ({compositionResult.offsetX.toFixed(1)}, {compositionResult.offsetY.toFixed(1)})
                 </Text>
                 <img className="panorama-preview" src={compositionResult.composedImage} alt="Composed panorama preview" />
+              </View>
+            )}
+            {blendingStatus && <Text>{blendingStatus}</Text>}
+            {blendingResult?.result?.success && (
+              <View marginTop="size-200">
+                <Text>
+                  Images: {blendingResult.result.imageCount} | Canvas: {blendingResult.result.width} x {blendingResult.result.height} | Feather radius: {blendingResult.result.featherRadius}px
+                </Text>
+                <img className="panorama-preview" src={blendingResult.result.blendedImage} alt="Blended panorama preview" />
               </View>
             )}
           </View>

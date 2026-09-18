@@ -18,7 +18,7 @@ export class HomographyEstimator {
     return { ...this.config };
   }
 
-  estimate(sourceFeatures, targetFeatures, matchResult) {
+  estimate(sourceFeatures, targetFeatures, matchResult, label = 'unknown pair') {
     if (!this.cv || typeof this.cv.findHomography !== 'function') {
       return { success: false, reason: 'OPENCV_UNAVAILABLE' };
     }
@@ -42,6 +42,16 @@ export class HomographyEstimator {
       sourcePoints.push(sourcePoint.x, sourcePoint.y);
       targetPoints.push(targetPoint.x, targetPoint.y);
     }
+
+    console.log('[GEOMETRY] Homography input', {
+      pair: label,
+      correspondences: matches.length,
+      sourcePoints,
+      targetPoints,
+      ransacReprojThreshold: this.config.ransacReprojThreshold,
+      maxIters: this.config.maxIters,
+      confidence: this.config.confidence
+    });
 
     let sourcePointMat;
     let targetPointMat;
@@ -79,6 +89,26 @@ export class HomographyEstimator {
       }
 
       const inlierCount = this._countInliers(inlierMask, matches.length);
+      const determinant = this._determinant(homography);
+      console.log('[GEOMETRY] Homography matrix', JSON.stringify({
+        pair: label,
+        direction: 'source -> target',
+        matrix: homography,
+        determinant
+      }));
+      console.log('[GEOMETRY] Homography result', {
+        pair: label,
+        direction: 'source -> target',
+        matrix: homography,
+        determinant,
+        containsNaN: homography.flat().some((value) => Number.isNaN(value)),
+        containsInfinity: homography.flat().some((value) => !Number.isFinite(value)),
+        totalCorrespondences: matches.length,
+        inlierCount,
+        outlierCount: matches.length - inlierCount,
+        inlierPercentage: (inlierCount / matches.length) * 100,
+        transformedSourceCorners: this._transformCorners(homography, sourceFeatures.width, sourceFeatures.height)
+      });
       return {
         success: true,
         homography,
@@ -159,6 +189,24 @@ export class HomographyEstimator {
       }
     }
     return inlierCount;
+  }
+
+  _determinant(matrix) {
+    const [[a, b, c], [d, e, f], [g, h, i]] = matrix;
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  }
+
+  _transformCorners(matrix, width, height) {
+    return [[0, 0], [width, 0], [width, height], [0, height]].map(([x, y]) => {
+      const denominator = matrix[2][0] * x + matrix[2][1] * y + matrix[2][2];
+      return {
+        input: [x, y],
+        output: [
+          (matrix[0][0] * x + matrix[0][1] * y + matrix[0][2]) / denominator,
+          (matrix[1][0] * x + matrix[1][1] * y + matrix[1][2]) / denominator
+        ]
+      };
+    });
   }
 }
 

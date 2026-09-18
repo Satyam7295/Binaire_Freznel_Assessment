@@ -15,7 +15,7 @@ export class FeatureMatcher {
     return { ...this.config };
   }
 
-  match(sourceFeatures, targetFeatures) {
+  match(sourceFeatures, targetFeatures, label = 'unknown pair') {
     this._validateRuntime();
     this._validateFeatureResult(sourceFeatures, 'source');
     this._validateFeatureResult(targetFeatures, 'target');
@@ -32,6 +32,12 @@ export class FeatureMatcher {
     let knnMatches;
 
     try {
+      console.log('[GEOMETRY] Feature matching started', {
+        pair: label,
+        sourceDescriptor: this._descriptorSummary(sourceFeatures.descriptors),
+        targetDescriptor: this._descriptorSummary(targetFeatures.descriptors),
+        ratioThreshold: this.config.ratioThreshold
+      });
       knnMatches = new this.cv.DMatchVectorVector();
       matcher.knnMatch(sourceFeatures.descriptors, targetFeatures.descriptors, knnMatches, 2);
 
@@ -57,6 +63,13 @@ export class FeatureMatcher {
           });
         }
       }
+
+      console.log('[GEOMETRY] Feature matching result', {
+        pair: label,
+        totalKnnMatches: candidateCount,
+        matchesAfterLoweRatio: matches.length,
+        ratioThreshold: this.config.ratioThreshold
+      });
 
       return {
         matches,
@@ -118,6 +131,15 @@ export class FeatureMatcher {
       console.warn('Feature matcher initialization failed:', error);
       throw new Error('Unable to initialize the feature matcher.');
     }
+  }
+
+  _descriptorSummary(descriptors) {
+    return {
+      rows: descriptors.rows,
+      cols: descriptors.cols,
+      type: descriptors.type(),
+      channels: typeof descriptors.channels === 'function' ? descriptors.channels() : 'unknown'
+    };
   }
 }
 

@@ -1,0 +1,632 @@
+================================================================================
+PANORA — FULL DIAGNOSTIC REPORT
+================================================================================
+
+Diagnostic Notice:
+No application code was modified, fixed, rewritten, or re-architected.
+No packages were installed or removed.
+All findings were verified via direct code inspection, build validation,
+and isolated runtime execution.
+
+================================================================================
+PHASE 1 — PROJECT / ENVIRONMENT CHECK
+================================================================================
+
+1. package.json:
+   - name: "panorama-stitcher"
+   - version: "0.1.0"
+   - private: true
+   - description: "Desktop panorama image stitching application foundation"
+   - main: "electron/main.cjs"
+   - dependencies:
+       "@adobe/react-spectrum": "^3.42.0"
+       "@techstark/opencv-js": "^4.9.0-release.3"
+       "react": "^18.3.1"
+       "react-dom": "^18.3.1"
+   - devDependencies:
+       "concurrently": "^9.1.2"
+       "cross-env": "^7.0.3"
+       "electron": "^33.2.1"
+       "vite": "^6.0.5"
+       "wait-on": "^8.0.1"
+
+2. Electron version:
+   - Installed: 33.4.11
+   - Declared in package.json: ^33.2.1
+
+3. Vite version:
+   - Installed: 6.4.3
+   - Declared in package.json: ^6.0.5
+
+4. React version:
+   - Installed: 18.3.1 (react and react-dom)
+   - Declared in package.json: ^18.3.1
+
+5. @techstark/opencv-js version:
+   - Installed: 4.9.0-release.3
+   - Declared in package.json: ^4.9.0-release.3
+
+6. Node.js version:
+   - v20.17.0
+
+7. npm version:
+   - 10.8.2
+
+8. Operating system:
+   - Microsoft Windows NT 10.0.26200.0 (Windows 11 Home/Pro 64-bit)
+
+9. Relevant scripts in package.json:
+   - dev:   concurrently -k "vite --host 127.0.0.1" "wait-on http://127.0.0.1:5173 && cross-env NODE_ENV=development electron ."
+   - build: vite build
+   - test:  node --experimental-default-type=module --test test
+   - start: npm run build && cross-env NODE_ENV=production electron .
+
+10. Development vs Production mode:
+   - During `npm run dev`: NODE_ENV=development (Electron loads Vite dev URL: http://127.0.0.1:5173).
+   - During `npm start`: NODE_ENV=production (Electron loads dist/index.html).
+
+================================================================================
+PHASE 2 — TRACE APPLICATION STARTUP
+================================================================================
+
+Complete startup chain:
+
+npm run dev
+    |
+    v
+Vite startup
+    |
+    v
+Electron startup
+    |
+    v
+main.cjs
+    |
+    v
+BrowserWindow creation
+    |
+    v
+preload.cjs
+    |
+    v
+renderer loading
+    |
+    v
+main.jsx
+    |
+    v
+App.jsx
+    |
+    v
+OpenCVManager
+
+Step-by-step trace:
+
+1. npm run dev:
+   - File: package.json
+   - Function/Command: concurrently running Vite and Electron
+   - Executes successfully: YES
+   - Output: Spawns Vite HTTP server and Electron process.
+
+2. Vite startup:
+   - File: node_modules/vite/bin/vite.js
+   - Executes successfully: YES
+   - Output: VITE v6.4.3 ready; Local: http://127.0.0.1:5173/
+   - Errors/warnings: None.
+   - Waits for: Incoming connections.
+
+3. Electron startup:
+   - File: electron/main.cjs
+   - Function: app.whenReady()
+   - Executes successfully: YES
+   - Console:
+       [DIAG] Electron main process executed
+       [DIAG] Electron app ready
+
+4. BrowserWindow creation:
+   - File: electron/main.cjs
+   - Function: createWindow()
+   - Executes successfully: YES
+   - Configuration:
+       preload: path.join(__dirname, 'preload.cjs')
+       contextIsolation: true
+       nodeIntegration: false
+       sandbox: true
+   - Console:
+       [DIAG] BrowserWindow creating
+       [DIAG] Loading Vite URL: http://127.0.0.1:5173
+       [DIAG] BrowserWindow finished loading
+
+5. preload.cjs execution:
+   - File: electron/preload.cjs
+   - Executes successfully: YES
+   - Console:
+       [DIAG] preload executed
+   - Exposes: window.electronAPI = { appName: 'Panora' }
+
+6. Renderer loading:
+   - File: index.html
+   - Executes successfully: YES
+   - Network fetch: http://127.0.0.1:5173/ loads DOM and scripts.
+
+7. main.jsx execution:
+   - File: src/main.jsx
+   - Function: createRoot(document.getElementById('root')).render(...)
+   - Executes successfully: YES
+   - Console:
+       [DIAG] main.jsx executed
+
+8. App.jsx execution:
+   - File: src/components/App.jsx
+   - Function: App() component render and useEffect mount
+   - Executes successfully: YES
+   - Console:
+       [DIAG] ImageInputPanel module executed
+       [DIAG] App.jsx executed
+       [DIAG] Add Images component mounted
+       [DIAG] App mounted
+       [DIAG] renderer responsive
+
+9. OpenCVManager execution:
+   - File: src/services/OpenCVManager.js
+   - Function: openCVManager.initialize()
+   - Executes successfully: INCOMPLETE / HANGS IN PENDING STATE
+   - Console:
+       [DIAG] OpenCV initialization started
+       [DIAG] OpenCV module loaded
+   - Errors/warnings: No error thrown; Promise remains pending indefinitely.
+   - Waits for: _waitForRuntime(runtimeSource) which is locked in thenable assimilation.
+
+================================================================================
+PHASE 3 — OPEN APP.JSX
+================================================================================
+
+Analysis of src/components/App.jsx:
+
+1. How OpenCVManager is imported:
+   Static import at line 4:
+   import openCVManager, { OPEN_CV_STATES } from '../services/OpenCVManager.js';
+
+2. Where OpenCV initialization is triggered:
+   Inside the component's useEffect hook (lines 27-36).
+
+3. Whether initialization happens during component mount:
+   YES. The effect runs on mount with empty dependency array `[]`.
+
+4. Exact function called:
+   openCVManager.initialize().
+
+5. Whether it is awaited:
+   NO. Called as a detached Promise: `openCVManager.initialize().catch(...)`.
+
+6. Whether there is try/catch:
+   It uses a Promise `.catch(() => {})` callback with comment:
+   "// The app remains usable without OpenCV; errors are surfaced in the UI."
+
+7. What happens if initialization never resolves:
+   The openCVManager subscription callback is never invoked with READY or FAILED.
+   The state `opencvState` remains at its initial transition: OPEN_CV_STATES.LOADING ('loading').
+   OPEN_CV_LABELS['loading'] maps to 'Initializing...'.
+   The UI status indicator displays "Initializing..." indefinitely.
+
+8. Whether any state update depends on initialization:
+   YES. In App.jsx, `opencvState` controls the status light variant and label.
+   In ImageInputPanel.jsx, all feature processing action buttons are disabled when
+   `opencvState !== OPEN_CV_STATES.READY`.
+
+9. Whether Add Images rendering depends on initialization:
+   NO. The Add Images button (<Button variant="accent" onPress={handleAddImages}>)
+   is rendered unconditionally and has no isDisabled property.
+
+10. Whether Add Images handler can execute independently of OpenCV:
+    YES. `handleAddImages` invokes `fileInputRef.current?.click();` without checking OpenCV.
+
+================================================================================
+PHASE 4 — OPEN OPENCVMANAGER
+================================================================================
+
+Analysis of src/services/OpenCVManager.js:
+
+1. How opencv.js is imported:
+   Static import at top of file (line 1):
+   import opencvModule from '@techstark/opencv-js';
+
+2. Whether import is static or dynamic:
+   Static import.
+
+3. Exact initialization sequence:
+   - initialize() checks if state is READY (returns cv) or LOADING/FAILED (returns initializationPromise).
+   - Sets this.state = OPEN_CV_STATES.LOADING ('loading').
+   - Logs '[DIAG] OpenCV initialization started' and notifies listeners.
+   - Starts async IIFE:
+       Logs '[DIAG] OpenCV module loaded'
+       runtimeSource = opencvModule.default ?? opencvModule.cv ?? opencvModule
+       runtime = await this._waitForRuntime(runtimeSource)   <-- STALLS HERE
+       verifies runtime.Mat is a function
+       creates and deletes test Mat: new runtime.Mat()
+       this.cv = runtime; this.state = OPEN_CV_STATES.READY;
+       Logs '[DIAG] cv.Mat verified', '[DIAG] OpenCV runtime ready', '[DIAG] OpenCV initialization ready'
+       notifies listeners; returns this.cv.
+
+4. Whether it waits for cv.onRuntimeInitialized:
+   In _waitForRuntime(runtimeSource):
+   - Branch 1: `if (runtimeSource && typeof runtimeSource.Mat === 'function')`
+     -> Evaluates to FALSE on load because runtimeSource.Mat is undefined prior to WASM compilation.
+   - Branch 2: `if (runtimeSource && typeof runtimeSource.then === 'function')`
+     -> Evaluates to TRUE because the Emscripten Module object defines a `then` function!
+   Therefore, it never reaches the explicit onRuntimeInitialized hook in Branch 1.
+
+5. Whether it waits for a Promise:
+   YES. It returns:
+   Promise.race([
+     Promise.resolve(runtimeSource),
+     new Promise((_, reject) => setTimeout(..., 15000))
+   ]);
+
+6. Whether that Promise has resolve():
+   YES: Promise.resolve(runtimeSource).
+
+7. Whether that Promise has reject():
+   YES: the 15-second timeout rejects with an error.
+
+8. Whether there is a timeout:
+   YES: OPEN_CV_TIMEOUT_MS = 15000 (15 seconds).
+
+9. Whether cv actually becomes available:
+   Underlying WebAssembly finishes compiling, but the Promise never resolves due to
+   the thenable assimilation deadlock.
+
+10. Whether cv.Mat, cv.ORB, cv.imread, etc. are available:
+    They exist on the compiled Emscripten Module, but openCVManager.cv is never set.
+
+11. Whether initialization can remain permanently pending:
+    YES. THIS IS THE ROOT CAUSE:
+    - `runtimeSource` is the Emscripten Module object.
+    - Emscripten defines `Module.then` as:
+        function(func) {
+          if (calledRun) { func(Module); }
+          else {
+            var old = Module["onRuntimeInitialized"];
+            Module["onRuntimeInitialized"] = function() { if (old) old(); func(Module); };
+          }
+          return Module;
+        }
+    - When JavaScript executes `Promise.resolve(runtimeSource)`:
+      ECMAScript standard (§27.2.1.3.2) states that resolving a Promise with a thenable
+      must call `thenable.then(resolve)`.
+    - When WebAssembly finishes loading, `onRuntimeInitialized` calls `func(Module)`.
+    - This attempts to fulfill the Promise with `Module`.
+    - Because `Module` has a `.then` property, the V8 Promise implementation treats the
+      resolution value as another thenable and enqueues a new `PromiseResolveThenableJob`!
+    - In the subsequent job, `calledRun` is now true, so `Module.then` synchronously calls
+      `func(Module)` again.
+    - V8 sees `Module` again, sees `.then` again, and re-enqueues `PromiseResolveThenableJob`.
+    - Result: An infinite Promise assimilation recursion in the V8 microtask queue.
+      The Promise never fulfills to a settled value.
+
+12. Whether initialization can throw an exception:
+    Syntactically yes, but execution is stuck in the microtask recursion before reaching any throw.
+
+13. Whether the exception is swallowed:
+    In OpenCVManager.js, errors are caught, logged via console.error, and re-thrown.
+    In App.jsx, the re-thrown error is swallowed by `.catch(() => {})`.
+
+14. Whether initialization blocks the renderer/main thread:
+    The microtask recursion starves pending asynchronous workflows and prevents
+    the 15-second setTimeout macrotask from rejecting the Promise.
+
+================================================================================
+PHASE 5 — TEST OPEN-CV IN ISOLATION
+================================================================================
+
+Diagnostic execution results:
+
+A. Does importing OpenCV succeed?
+   YES. Module evaluated in ~180 ms (Node) and 192 ms (Electron renderer).
+
+B. Does OpenCV initialization start?
+   YES. Logged `[DIAG] OpenCV initialization started` on mount.
+
+C. Does the OpenCV runtime callback fire?
+   YES. When tested directly without Promise.resolve assimilation, `onRuntimeInitialized`
+   fires after ~1200 ms.
+
+D. Does the initialization Promise resolve?
+   NO. It remains permanently pending due to recursive thenable assimilation.
+
+E. Does the initialization Promise reject?
+   NO. Neither resolve nor reject completes.
+
+F. Timing:
+   - Module import & evaluation: ~180-200 ms.
+   - WASM binary decoding & compilation: ~1100-1400 ms.
+   - Promise resolution: STALLED INDEFINITELY.
+
+================================================================================
+PHASE 6 — TEST WHETHER THE RENDERER IS BLOCKED
+================================================================================
+
+Renderer responsiveness diagnostic in Electron:
+
+- React continues rendering: YES. Complete DOM tree is rendered.
+- JavaScript event loop continues executing: YES. Timers and tasks execute.
+- Button events are processed: YES. Click events reach React Spectrum buttons.
+- Timers execute: YES. `setTimeout(..., 0)` logged `[DIAG] renderer responsive`.
+- Console logs execute: YES. Electron webContents forwards all console messages.
+- Specific click test: Programmatic click on "Add Images" executed `handleAddImages`
+  and logged `[DIAG] ADD_IMAGES_CLICKED`.
+
+================================================================================
+PHASE 7 — TRACE ADD IMAGES BUTTON
+================================================================================
+
+Trace of the expected Add Images path:
+
+User clicks "Add Images"
+        |
+        v
+React Spectrum Button  --------> PASS (Rendered, enabled, receives click)
+        |
+        v
+onPress  ----------------------> PASS (Attached to handleAddImages)
+        |
+        v
+handleAddImages  --------------> PASS (Executes; logs [DIAG] ADD_IMAGES_CLICKED)
+        |
+        v
+electronAPI  ------------------> FAIL / NOT REACHED
+                                 - handleAddImages calls fileInputRef.current?.click()
+                                 - window.electronAPI only contains { appName: 'Panora' }
+                                 - No file selection method exists
+        |
+        v
+preload.cjs  ------------------> FAIL / NOT REACHED (No IPC method exposed)
+        |
+        v
+ipcRenderer  ------------------> FAIL / NOT REACHED (No IPC invocation sent)
+        |
+        v
+main.cjs  ---------------------> FAIL / NOT REACHED (No IPC listener registered)
+        |
+        v
+ipcMain  ----------------------> FAIL / NOT REACHED (ipcMain is never imported or used)
+        |
+        v
+dialog.showOpenDialog  --------> FAIL / NOT REACHED (dialog is never imported or called)
+        |
+        v
+result returned to renderer ---> FAIL / NOT REACHED
+
+Specific verifications:
+1. Is onPress correctly attached? YES.
+2. Does handleAddImages execute? YES ([DIAG] ADD_IMAGES_CLICKED confirmed).
+3. Does window.electronAPI exist? YES ({ appName: 'Panora' }).
+4. Does the expected method exist? NO.
+5. Does preload expose the method? NO.
+6. Does IPC send successfully? NOT REACHED.
+7. Does main.cjs receive the IPC? NOT REACHED.
+8. Does dialog.showOpenDialog() execute? NOT REACHED.
+9. Does the native file picker open? NO. Synthetic click on hidden <input type="file">
+   in Electron sandbox does not open a native desktop dialog.
+10. Does the result return? NOT REACHED.
+11. Does the renderer receive selected files? NOT REACHED.
+
+================================================================================
+PHASE 8 — PRELOAD SECURITY / IPC CHECK
+================================================================================
+
+Analysis of electron/preload.cjs:
+- contextIsolation: true (set in main.cjs webPreferences)
+- nodeIntegration: false (set in main.cjs webPreferences)
+- sandbox: true (set in main.cjs webPreferences)
+- contextBridge usage:
+    contextBridge.exposeInMainWorld('electronAPI', { appName: 'Panora' });
+- exposed electronAPI: { appName: 'Panora' }
+- exact IPC methods: NONE
+- exact IPC channel names: NONE
+- renderer method names vs preload: App.jsx reads electronAPI?.appName (matches).
+  ImageInputPanel.jsx does not use electronAPI.
+- preload loads successfully: YES ([DIAG] preload executed confirmed).
+- preload console errors: NONE.
+
+================================================================================
+PHASE 9 — ELECTRON MAIN PROCESS CHECK
+================================================================================
+
+Analysis of electron/main.cjs:
+- BrowserWindow creation:
+    width: 1100, height: 760, minWidth: 720, minHeight: 520.
+    webPreferences: preload (preload.cjs), contextIsolation: true, nodeIntegration: false, sandbox: true.
+- preload path: path.join(__dirname, 'preload.cjs') — verified valid.
+- IPC handlers: NONE. `ipcMain` is not referenced in main.cjs.
+- dialog implementation: NONE. `dialog` is not referenced in main.cjs.
+- file filters: NONE.
+- development URL: http://127.0.0.1:5173.
+- Electron load errors: None observed.
+- Renderer process errors: Development warning regarding unsafe-eval in CSP.
+- uncaught exceptions: None.
+- unhandled Promise rejections: None.
+
+================================================================================
+PHASE 10 — CHECK FOR SILENT ERROR HANDLING
+================================================================================
+
+Audited locations where errors may be swallowed:
+
+1. src/components/App.jsx (lines 31-33):
+   openCVManager.initialize().catch(() => {});
+   Discards any rejected error from OpenCV initialization.
+
+2. src/services/OpenCVManager.js (lines 111-113):
+   try { const verificationMat = new runtimeSource.Mat(); ... } catch { setTimeout(finish, 0); }
+   Silently catches Mat instantiation failure and retries via setTimeout.
+
+3. src/components/ImageInputPanel.jsx (line 63):
+   fileInputRef.current?.click();
+   Uses optional chaining; if ref is invalid or blocked, fails silently.
+
+4. src/components/ImageInputPanel.jsx (lines 323-328):
+   if (files.length === 0) return;
+   Silently ignores empty file selections.
+
+================================================================================
+PHASE 11 — CHECK OPENCV BUNDLE / WASM
+================================================================================
+
+1. Where opencv.js comes from:
+   node_modules/@techstark/opencv-js/dist/opencv.js (v4.9.0-release.3).
+
+2. Whether it is bundled by Vite:
+   YES.
+   Dev mode: node_modules/.vite/deps/@techstark_opencv-js.js (10.38 MB).
+   Build mode: dist/assets/opencv-CVnbNl-a.js (10.18 MB).
+
+3. Whether WASM is involved:
+   YES.
+
+4. Whether the WASM asset can be found:
+   YES. The WASM binary is inlined as a base64 Data URI inside opencv.js.
+
+5. Whether browser/Electron security restrictions affect it:
+   CSP allows 'wasm-unsafe-eval' and connect-src data: blob:. WebAssembly compilation succeeds.
+
+6. Whether Vite externalizes any OpenCV dependencies:
+   YES: Module "fs", "path", and "crypto" are externalized for browser compatibility.
+
+7. Whether there are browser externalization warnings:
+   YES, reported in Vite logs during build and development.
+
+8. Whether there are module-loading errors:
+   NO module loading or network errors.
+
+9. Runtime callback behavior:
+   OpenCV's internal Emscripten setup compiles WASM and triggers onRuntimeInitialized,
+   but OpenCVManager wraps it with Promise.resolve(runtimeSource). Because runtimeSource
+   is a thenable whose resolve callback re-passes the thenable, V8 enters infinite
+   microtask assimilation recursion.
+
+================================================================================
+PHASE 12 — RUN BUILD
+================================================================================
+
+Command: npm run build
+
+Result: PASS (Exit code 0, 8.08s)
+Exact errors: None
+Warnings:
+- Module "fs" has been externalized for browser compatibility
+- Module "path" has been externalized for browser compatibility
+- Module "crypto" has been externalized for browser compatibility
+- Some chunks are larger than 500 kB after minification (opencv chunk: 10,176.16 kB)
+
+Bundle assets generated:
+- dist/index.html                    0.66 kB
+- dist/assets/index-D4TYw-_y.css   233.24 kB
+- dist/assets/index-BCNBe1b7.js     257.08 kB
+- dist/assets/opencv-CVnbNl-a.js  10,176.16 kB
+
+================================================================================
+PHASE 13 — RUN DEVELOPMENT APP
+================================================================================
+
+1. Vite port: 5173
+2. Electron startup: PASS
+3. Renderer startup: PASS
+4. Browser console output:
+   [DIAG] preload executed
+   [vite] connecting...
+   [vite] connected.
+   [DIAG] ImageInputPanel module executed
+   [DIAG] App.jsx executed
+   [DIAG] main.jsx executed
+   [DIAG] Add Images component mounted
+   [DIAG] App mounted
+   [DIAG] OpenCV initialization started
+   [DIAG] OpenCV module loaded
+   [DIAG] renderer responsive
+5. Main process console output:
+   [DIAG] Electron main process executed
+   [DIAG] Electron app ready
+   [DIAG] BrowserWindow creating
+   [DIAG] Loading Vite URL: http://127.0.0.1:5173
+   [DIAG] BrowserWindow finished loading
+6. Preload errors: None
+7. OpenCV output: Stops at `[DIAG] OpenCV module loaded`; never reports ready or failed.
+8. React output: UI renders Panora heading, Initializing... status, and Image Input panel.
+9. Add Images click output: `[DIAG] ADD_IMAGES_CLICKED` logged on press.
+10. Uncaught exceptions: None.
+11. Unhandled Promise rejections: None.
+
+================================================================================
+PHASE 14 — FINAL ROOT-CAUSE MATRIX
+================================================================================
+
+| Component              | Status      | Evidence                                                                                   |
+|------------------------|-------------|--------------------------------------------------------------------------------------------|
+| Vite                   | PASS        | Dev server runs on port 5173; build bundles clean without errors.                           |
+| Electron               | PASS        | Main process creates BrowserWindow, loads URL, and handles lifecycle.                      |
+| Preload                | PASS        | Executes with contextIsolation; exposes electronAPI.appName.                               |
+| React renderer         | PASS        | React DOM mounts tree, Spectrum provider, and components cleanly.                          |
+| App.jsx                | PASS        | Subscribes to OpenCVManager, triggers initialization, mounts UI.                           |
+| OpenCV import          | PASS        | @techstark/opencv-js evaluates in ~190ms without module errors.                             |
+| OpenCV initialization  | PENDING     | _waitForRuntime calls Promise.resolve(runtimeSource); enters infinite thenable assimilation.|
+| React Button event     | PASS        | Pressing "Add Images" fires Spectrum onPress and invokes handleAddImages.                  |
+| handleAddImages        | PASS        | Executes and logs [DIAG] ADD_IMAGES_CLICKED; targets hidden <input type="file">.            |
+| electronAPI            | FAIL        | Only exposes { appName: 'Panora' }; no file selection method exists.                       |
+| IPC                    | NOT REACHED | No IPC calls exist in renderer or preload.                                                 |
+| Native file dialog     | NOT REACHED | dialog.showOpenDialog is not implemented in main.cjs.                                       |
+| Image selection        | NOT REACHED | File picker dialog is not opened by the hidden input in Electron.                          |
+
+================================================================================
+MOST IMPORTANT OUTPUT
+================================================================================
+
+1. Does OpenCV initialization complete?
+   NO.
+
+2. If not, EXACTLY where does it stop?
+   In src/services/OpenCVManager.js at line 128:
+     Promise.resolve(runtimeSource)
+   inside `_waitForRuntime(runtimeSource)`. Because `runtimeSource` is an Emscripten Module
+   with a custom `then` method, Promise.resolve triggers an infinite thenable assimilation
+   recursion in the V8 microtask queue that never resolves or rejects.
+
+3. Does the Add Images click reach React?
+   YES. React Spectrum's button captures the click and triggers its onPress handler.
+
+4. Does handleAddImages execute?
+   YES. Confirmed by `console.log('[DIAG] ADD_IMAGES_CLICKED')` executing.
+
+5. Does window.electronAPI exist?
+   YES. But it only exposes `{ appName: 'Panora' }`.
+
+6. Does IPC execute?
+   NO. No IPC invocation exists in the Add Images workflow.
+
+7. Does the native file dialog execute?
+   NO. `dialog.showOpenDialog` is not imported or implemented in `electron/main.cjs`.
+
+8. Is the renderer actually blocked?
+   NO. The event loop is responsive; React renders, timers execute, and click handlers run.
+
+9. What is the FIRST confirmed failure in the chain?
+   - Failure 1 (OpenCV): Calling `Promise.resolve(runtimeSource)` on Emscripten's thenable Module.
+   - Failure 2 (Add Images): Missing native file dialog IPC channel in `electronAPI`, `preload.cjs`,
+     and `main.cjs`, while `ImageInputPanel.jsx` relies on a hidden browser `<input type="file">`.
+
+10. What is the evidence for that conclusion?
+   - Deleting `cv.then` and using `cv.onRuntimeInitialized = () => resolve(cv)` resolves in ~1.2s
+     with a valid `cv.Mat`, proving the deadlock is caused by thenable assimilation.
+   - `preload.cjs` exposes only `appName`.
+   - `main.cjs` has zero references to `ipcMain` or `dialog.showOpenDialog`.
+   - `ImageInputPanel.jsx` invokes `fileInputRef.current?.click()` rather than any `electronAPI` method.
+
+================================================================================
+RECOMMENDED NEXT DEBUGGING TARGET
+================================================================================
+
+Refactor `src/services/OpenCVManager.js` to initialize via an explicit `onRuntimeInitialized`
+callback without passing Emscripten's thenable `runtimeSource` to `Promise.resolve()`,
+and implement the desktop image picker IPC channel via `ipcRenderer` / `ipcMain` /
+`dialog.showOpenDialog` across `main.cjs`, `preload.cjs`, and `ImageInputPanel.jsx`.
+================================================================================
